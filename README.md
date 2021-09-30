@@ -1,2 +1,3 @@
 # Calculator
 
+![preview](preview.png)
