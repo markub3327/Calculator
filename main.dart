@@ -1,4 +1,8 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'model.dart';
 
 void main() {
   runApp(const MyApp());
@@ -59,63 +63,91 @@ class _MyHomePageState extends State<MyHomePage> {
   num _result = 0;
   var _input = '';
   oper _oper = oper.NONE;
+  Future<http.Response> fr = http.get(Uri.parse("https://api.openweathermap.org/data/2.5/weather?q=Trnava,SK&appid=6eb6b05fcdc850818c6238aef85610be&units=metric"));
+  bool weatherOn = true;
+
+  @override
+  void initState() {
+    Timer.periodic(Duration(seconds: 1), (_) async {
+        http.Response r = await fr;
+        String data = r.body;
+
+        Map<String, dynamic> dataMap = json.decode(data);
+        Welcome pr = Welcome.fromJson(dataMap);
+
+        setState(() {
+            if (weatherOn)
+              _input = 'Temp: ${pr.main!.temp} °C\nPressure: ${pr.main!.pressure} hPa\nHumidity: ${pr.main!.humidity} %';
+        });
+    });
+  }
 
   void _num0() {
     setState(() {
+      if (weatherOn) { _input = ''; weatherOn = false; }
       _input += '0';
     });
   }
 
   void _num1() {
     setState(() {
+      if (weatherOn) { _input = ''; weatherOn = false; }
       _input += '1';
     });
   }
 
   void _num2() {
     setState(() {
+      if (weatherOn) { _input = ''; weatherOn = false; }
       _input += '2';
     });
   }
 
   void _num3() {
     setState(() {
+      if (weatherOn) { _input = ''; weatherOn = false; }
       _input += '3';
     });
   }
 
   void _num4() {
     setState(() {
+      if (weatherOn) { _input = ''; weatherOn = false; }
       _input += '4';
     });
   }
 
   void _num5() {
     setState(() {
+      if (weatherOn) { _input = ''; weatherOn = false; }
       _input += '5';
     });
   }
 
   void _num6() {
     setState(() {
+      if (weatherOn) { _input = ''; weatherOn = false; }
       _input += '6';
     });
   }
 
   void _num7() {
     setState(() {
+      if (weatherOn) { _input = ''; weatherOn = false; }
       _input += '7';
     });
   }
 
   void _num8() {
     setState(() {
+      if (weatherOn) { _input = ''; weatherOn = false; }
       _input += '8';
     });
   }
 
   void _num9() {
     setState(() {
+      if (weatherOn) { _input = ''; weatherOn = false; }
       _input += '9';
     });
   }
@@ -174,6 +206,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
   void _clear() {
     setState(() {
+      weatherOn = true;
       _result = 0;
       _input = '';
       _oper = oper.NONE;
