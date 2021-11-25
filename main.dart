@@ -1,3 +1,4 @@
+import 'package:calculator/message.dart';
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:http/http.dart' as http;
@@ -5,6 +6,8 @@ import 'dart:convert';
 import 'model.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_remote_config/firebase_remote_config.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:flutter_facebook_auth/flutter_facebook_auth.dart';
 
 void main() {
   runApp(const MyApp());
@@ -44,33 +47,105 @@ class MyHomePage extends StatefulWidget {
   _MyHomePageState createState() => _MyHomePageState();
 }
 
-enum oper {
-  ADD,
-  SUB,
-  MUL,
-  DIV,
-  NONE,
-}
-
 class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   /// The future is part of the state of our widget. We should not call `initializeApp`
   /// directly inside [build].
   final Future<FirebaseApp> _initialization = Firebase.initializeApp();
 
-  num _result = 0;
-  var _input = '';
-  String? _city;
-  oper _oper = oper.NONE;
+  AccessToken? fbAccessToken;
+  String? fbAuthorPicture;
+  String? fbAuthorName;
+  String? fbAuthorId;
+
+  List<num> nums = [];
+  List<String> opers = [];
+
+  var input = '';
+  var message = '';
+  num? result;
+  bool holdResult = false;
+  bool waitForInput = false;
+
+  String? city;
   bool weatherOn = true;
-  static RemoteConfig? _remoteConfig;
   Future<http.Response>? httpWeather;
+
+  static RemoteConfig? _remoteConfig;
   final defaults = <String, dynamic>{"City": "Bratislava"};
+
+  void saveMessage(Message msg) {
+    final _dbRef = FirebaseDatabase.instance.reference().child("calculator");
+    _dbRef.push().set(msg.toJson());
+  }
+
+  void initListener() {
+    final DatabaseReference _dbRef =
+        FirebaseDatabase.instance.reference().child("calculator");
+    _dbRef
+        .orderByChild('datetime')
+        .limitToLast(10)
+        .onChildAdded
+        .listen((event) {
+      var msg = Message.fromSnapshot(event.snapshot);
+
+      // prejdi pouzivane operandy a upozorni usera
+      var mean = 0.0;
+      msg.nums.forEach((element) {
+        mean += element;
+      });
+      mean /= msg.nums.length;
+
+      if (mean <= 10) {
+        setState(() {
+          message = "Please don't use a calculator for numbers to 10 !!!";
+        });
+      } else {
+        setState(() {
+          message = "You're clever.";
+        });
+      }
+    });
+  }
+
+  void getFacebook() async {
+    // over spravnost prihlasenia
+    if (fbAccessToken != null) {
+      final userData =
+          await FacebookAuth.instance.getUserData(fields: "id,name,picture");
+
+      fbAuthorName = userData["name"];
+      fbAuthorId = userData["id"];
+      setState(() {
+        fbAuthorPicture = userData["picture"]["data"]["url"];
+        message = "Welcome, $fbAuthorName!";
+      });
+    }
+  }
+
+  void initFacebook() async {
+    if (fbAccessToken == null) {
+      final LoginResult result = await FacebookAuth.instance
+          .login(); // by default we request the email and the public profile
+      if (result.status == LoginStatus.success) {
+        fbAccessToken = result.accessToken;
+
+        getFacebook();
+      } else {
+        setState(() {
+          message =
+              "Cannot connect to Facebook API: ${result.status}, ${result.message}";
+        });
+      }
+    }
+  }
 
   @override
   void initState() {
     super.initState();
 
     WidgetsBinding.instance!.addObserver(this);
+
+    initListener();
   }
 
   @override
@@ -92,46 +167,35 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
       if (_remoteConfig != null) {
         _remoteConfig!.activate();
 
-        _city = _remoteConfig!.getString("City");
+        city = _remoteConfig!.getString("City");
         httpWeather = http.get(Uri.parse(
-            "https://api.openweathermap.org/data/2.5/weather?q=${_city},SK&appid=6eb6b05fcdc850818c6238aef85610be&units=metric"));
+            "https://api.openweathermap.org/data/2.5/weather?q=$city,SK&appid=6eb6b05fcdc850818c6238aef85610be&units=metric"));
 
-        _getWeather();
+        getWeather();
+        getFacebook();
       }
     }
   }
 
-  _initRemoteConfig() async {
-    _remoteConfig = RemoteConfig.instance;
-    await _remoteConfig!.setDefaults(defaults);
-    await _remoteConfig!.fetch();
+  initRemoteConfig() async {
+    if (_remoteConfig == null) {
+      _remoteConfig = RemoteConfig.instance;
+      await _remoteConfig!.setDefaults(defaults);
+      await _remoteConfig!.fetch();
 
-    await _remoteConfig!.setConfigSettings(RemoteConfigSettings(
-        fetchTimeout: const Duration(minutes: 1),
-        minimumFetchInterval: const Duration(minutes: 1)));
+      await _remoteConfig!.setConfigSettings(RemoteConfigSettings(
+          fetchTimeout: const Duration(minutes: 5),
+          minimumFetchInterval: const Duration(hours: 12)));
 
-    _city = _remoteConfig!.getString("City");
-    httpWeather = http.get(Uri.parse(
-        "https://api.openweathermap.org/data/2.5/weather?q=${_city},SK&appid=6eb6b05fcdc850818c6238aef85610be&units=metric"));
-  }
-
-  Future<void> _fetchRemoteConfig() async {
-    try {
-      await _remoteConfig!.fetchAndActivate();
-
-      print('Last fetch status: ' + _remoteConfig!.lastFetchStatus.toString());
-      print('Last fetch time: ' + _remoteConfig!.lastFetchTime.toString());
-      print('New City: ' + _remoteConfig!.getString("City").toString());
-
-      _city = _remoteConfig!.getString("City");
+      city = _remoteConfig!.getString("City");
       httpWeather = http.get(Uri.parse(
-          "https://api.openweathermap.org/data/2.5/weather?q=${_city},SK&appid=6eb6b05fcdc850818c6238aef85610be&units=metric"));
-    } catch (e) {
-      print('Error ${e.toString()}');
+          "https://api.openweathermap.org/data/2.5/weather?q=$city,SK&appid=6eb6b05fcdc850818c6238aef85610be&units=metric"));
+
+      await getWeather();
     }
   }
 
-  Future<void> _getWeather() async {
+  Future<void> getWeather() async {
     try {
       http.Response? r = await httpWeather;
       String data = r!.body;
@@ -140,175 +204,263 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
       Welcome pr = Welcome.fromJson(dataMap);
 
       setState(() {
-        if (weatherOn)
-          _input =
-              'City: ${_city}\nTemp: ${pr.main!.temp} °C\nPressure: ${pr.main!.pressure} hPa\nHumidity: ${pr.main!.humidity} %';
+        input =
+            'City: $city\nTemp: ${pr.main!.temp} °C\nPressure: ${pr.main!.pressure} hPa\nHumidity: ${pr.main!.humidity} %';
       });
     } catch (e) {
-      print('Error ${e.toString()}');
+      setState(() {
+        input = "Cannot read weather !";
+      });
     }
   }
 
   void _num0() {
     setState(() {
-      if (weatherOn) {
-        _input = '';
+      if (weatherOn || holdResult) {
+        input = '';
         weatherOn = false;
+        holdResult = false;
       }
-      _input += '0';
+      input += '0';
+      waitForInput = false;
     });
   }
 
   void _num1() {
     setState(() {
-      if (weatherOn) {
-        _input = '';
+      if (weatherOn || holdResult) {
+        input = '';
         weatherOn = false;
+        holdResult = false;
       }
-      _input += '1';
+      input += '1';
+      waitForInput = false;
     });
   }
 
   void _num2() {
     setState(() {
-      if (weatherOn) {
-        _input = '';
+      if (weatherOn || holdResult) {
+        input = '';
         weatherOn = false;
+        holdResult = false;
       }
-      _input += '2';
+      input += '2';
+      waitForInput = false;
     });
   }
 
   void _num3() {
     setState(() {
-      if (weatherOn) {
-        _input = '';
+      if (weatherOn || holdResult) {
+        input = '';
         weatherOn = false;
+        holdResult = false;
       }
-      _input += '3';
+      input += '3';
+      waitForInput = false;
     });
   }
 
   void _num4() {
     setState(() {
-      if (weatherOn) {
-        _input = '';
+      if (weatherOn || holdResult) {
+        input = '';
         weatherOn = false;
+        holdResult = false;
       }
-      _input += '4';
+      input += '4';
+      waitForInput = false;
     });
   }
 
   void _num5() {
     setState(() {
-      if (weatherOn) {
-        _input = '';
+      if (weatherOn || holdResult) {
+        input = '';
         weatherOn = false;
+        holdResult = false;
       }
-      _input += '5';
+      input += '5';
+      waitForInput = false;
     });
   }
 
   void _num6() {
     setState(() {
-      if (weatherOn) {
-        _input = '';
+      if (weatherOn || holdResult) {
+        input = '';
         weatherOn = false;
+        holdResult = false;
       }
-      _input += '6';
+      input += '6';
+      waitForInput = false;
     });
   }
 
   void _num7() {
     setState(() {
-      if (weatherOn) {
-        _input = '';
+      if (weatherOn || holdResult) {
+        input = '';
         weatherOn = false;
+        holdResult = false;
       }
-      _input += '7';
+      input += '7';
+      waitForInput = false;
     });
   }
 
   void _num8() {
     setState(() {
-      if (weatherOn) {
-        _input = '';
+      if (weatherOn || holdResult) {
+        input = '';
         weatherOn = false;
+        holdResult = false;
       }
-      _input += '8';
+      input += '8';
+      waitForInput = false;
     });
   }
 
   void _num9() {
     setState(() {
-      if (weatherOn) {
-        _input = '';
+      if (weatherOn || holdResult) {
+        input = '';
         weatherOn = false;
+        holdResult = false;
       }
-      _input += '9';
+      input += '9';
+      waitForInput = false;
+    });
+  }
+
+  void process(String oper) {
+    switch (oper) {
+      case "+":
+        result = result! + nums.last;
+        break;
+      case "-":
+        result = result! - nums.last;
+        break;
+      case "*":
+        result = result! * nums.last;
+        break;
+      case "/":
+        result = result! / nums.last;
+        break;
+      default:
+        break;
+    }
+
+    setState(() {
+      input = result.toString();
     });
   }
 
   void _add() {
-    setState(() {
-      _result = int.parse(_input);
-      _input = '';
-      _oper = oper.ADD;
-    });
+    if (waitForInput == false) {
+      nums.add(num.parse(input));
+      print("input: $input\tresult: $result\toper: $opers\tlast_num: $nums");
+
+      if (result == null) {
+        result = nums.last;
+      } else {
+        process(opers.last);
+      }
+
+      opers.add("+");
+      holdResult = true;
+      waitForInput = true;
+    } else {
+      opers.removeAt(opers.length - 1);
+      opers.add("+");
+    }
   }
 
   void _sub() {
-    setState(() {
-      _result = int.parse(_input);
-      _input = '';
-      _oper = oper.SUB;
-    });
+    if (waitForInput == false) {
+      nums.add(num.parse(input));
+      print("input: $input\tresult: $result\toper: $opers\tlast_num: $nums");
+
+      if (result == null) {
+        result = nums.last;
+      } else {
+        process(opers.last);
+      }
+
+      opers.add("-");
+      holdResult = true;
+      waitForInput = true;
+    } else // change operand
+    {
+      opers.removeAt(opers.length - 1);
+      opers.add("-");
+    }
   }
 
   void _mul() {
-    setState(() {
-      _result = int.parse(_input);
-      _input = '';
-      _oper = oper.MUL;
-    });
+    if (waitForInput == false) {
+      nums.add(num.parse(input));
+      print("input: $input\tresult: $result\toper: $opers\tlast_num: $nums");
+
+      if (result == null) {
+        result = nums.last;
+      } else {
+        process(opers.last);
+      }
+
+      opers.add("*");
+      holdResult = true;
+      waitForInput = true;
+    } else // change operand
+    {
+      opers.removeAt(opers.length - 1);
+      opers.add("*");
+    }
   }
 
   void _div() {
-    setState(() {
-      _result = int.parse(_input);
-      _input = '';
-      _oper = oper.DIV;
-    });
+    if (waitForInput == false) {
+      nums.add(num.parse(input));
+      print(
+          "input: $input\tresult: $result\toper: ${opers}\tlast_num: ${nums}");
+
+      if (result == null) {
+        result = nums.last;
+      } else {
+        process(opers.last);
+      }
+
+      opers.add("/");
+      holdResult = true;
+      waitForInput = true;
+    } else // change operand
+    {
+      opers.removeAt(opers.length - 1);
+      opers.add("/");
+    }
   }
 
   void _equal() {
-    setState(() {
-      switch (_oper) {
-        case oper.ADD:
-          _result += int.parse(_input);
-          break;
-        case oper.SUB:
-          _result -= int.parse(_input);
-          break;
-        case oper.MUL:
-          _result *= int.parse(_input);
-          break;
-        case oper.DIV:
-          _result /= int.parse(_input);
-          break;
-        case oper.NONE:
-          break;
+    if (!weatherOn) {
+      nums.add(num.parse(input));
+
+      if (result != null) {
+        process(opers.last);
       }
-      _input = _result.toString();
-    });
+
+      saveMessage(Message(
+          nums, opers, result, DateTime.now(), fbAuthorId, fbAuthorName));
+    }
   }
 
   void _clear() {
     setState(() {
       weatherOn = true;
-      _result = 0;
-      _input = '';
-      _oper = oper.NONE;
+      result = null;
+      input = '';
+      nums.clear();
+      opers.clear();
     });
   }
 
@@ -335,7 +487,14 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
         // Once complete, show your application
         if (snapshot.connectionState == ConnectionState.done) {
           // init Remote config
-          _initRemoteConfig();
+          initRemoteConfig();
+          initFacebook();
+
+          Timer.periodic(const Duration(minutes: 5), (_) async {
+            if (_remoteConfig != null && weatherOn) {
+              getWeather();
+            }
+          });
 
           return Scaffold(
               appBar: AppBar(
@@ -344,47 +503,48 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
                 title: Text(widget.title),
               ),
               body: Column(children: <Widget>[
-                Expanded(
-                    child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                        //ROW 1
-                        children: [
-                      Text(
-                        '$_input',
-                        style: Theme.of(context).textTheme.headline5,
-                      ),
-                    ])),
+                Container(
+                    margin: const EdgeInsets.all(15),
+                    child: Text(input, style: const TextStyle(fontSize: 25))),
+                Row(children: [
+                  if (fbAuthorPicture != null) Image.network(fbAuthorPicture!),
+                  Container(
+                      margin: const EdgeInsets.all(15),
+                      child:
+                          Text(message, style: const TextStyle(fontSize: 15))),
+                ]),
                 Expanded(
                   child: Row(
-                      //ROW 2
+                      //ROW 3
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
                         TextButton(
                             onPressed: _num1,
-                            child: Text("1",
-                                style: new TextStyle(
+                            child: const Text("1",
+                                style: TextStyle(
                                   fontSize: 40.0,
                                   color: Colors.black,
                                 ))),
                         TextButton(
                           onPressed: _num2,
-                          child: Text("2",
-                              style: new TextStyle(
+                          child: const Text("2",
+                              style: TextStyle(
                                 fontSize: 40.0,
                                 color: Colors.black,
                               )),
                         ),
                         TextButton(
                           onPressed: _num3,
-                          child: Text("3",
-                              style: new TextStyle(
+                          child: const Text("3",
+                              style: TextStyle(
                                 fontSize: 40.0,
                                 color: Colors.black,
                               )),
                         ),
                         TextButton(
                           onPressed: _add,
-                          child: Text("+",
-                              style: new TextStyle(
+                          child: const Text("+",
+                              style: TextStyle(
                                 fontSize: 40.0,
                                 color: Colors.black,
                               )),
@@ -393,37 +553,37 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
                 ),
                 Expanded(
                     child: Row(
-                        //ROW 3
+                        //ROW 4
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
                       TextButton(
                         onPressed: _num4,
-                        child: Text("4",
-                            style: new TextStyle(
+                        child: const Text("4",
+                            style: TextStyle(
                               fontSize: 40.0,
                               color: Colors.black,
                             )),
                       ),
                       TextButton(
                         onPressed: _num5,
-                        child: Text("5",
-                            style: new TextStyle(
+                        child: const Text("5",
+                            style: TextStyle(
                               fontSize: 40.0,
                               color: Colors.black,
                             )),
                       ),
                       TextButton(
                         onPressed: _num6,
-                        child: Text("6",
-                            style: new TextStyle(
+                        child: const Text("6",
+                            style: TextStyle(
                               fontSize: 40.0,
                               color: Colors.black,
                             )),
                       ),
                       TextButton(
                         onPressed: _sub,
-                        child: Text("-",
-                            style: new TextStyle(
+                        child: const Text("-",
+                            style: TextStyle(
                               fontSize: 40.0,
                               color: Colors.black,
                             )),
@@ -431,37 +591,37 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
                     ])),
                 Expanded(
                     child: Row(
-                        //ROW 3
+                        //ROW 5
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
                       TextButton(
                         onPressed: _num7,
-                        child: Text("7",
-                            style: new TextStyle(
+                        child: const Text("7",
+                            style: TextStyle(
                               fontSize: 40.0,
                               color: Colors.black,
                             )),
                       ),
                       TextButton(
                         onPressed: _num8,
-                        child: Text("8",
-                            style: new TextStyle(
+                        child: const Text("8",
+                            style: TextStyle(
                               fontSize: 40.0,
                               color: Colors.black,
                             )),
                       ),
                       TextButton(
                         onPressed: _num9,
-                        child: Text("9",
-                            style: new TextStyle(
+                        child: const Text("9",
+                            style: TextStyle(
                               fontSize: 40.0,
                               color: Colors.black,
                             )),
                       ),
                       TextButton(
                         onPressed: _mul,
-                        child: Text("*",
-                            style: new TextStyle(
+                        child: const Text("*",
+                            style: TextStyle(
                               fontSize: 40.0,
                               color: Colors.black,
                             )),
@@ -469,57 +629,56 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
                     ])),
                 Expanded(
                     child: Row(
-                        //ROW 3
+                        //ROW 6
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
                       TextButton(
                         onPressed: _clear,
-                        child: Text("C",
-                            style: new TextStyle(
+                        child: const Text("C",
+                            style: TextStyle(
                               fontSize: 40.0,
                               color: Colors.black,
                             )),
                       ),
                       TextButton(
                         onPressed: _num0,
-                        child: Text("0",
-                            style: new TextStyle(
+                        child: const Text("0",
+                            style: TextStyle(
                               fontSize: 40.0,
                               color: Colors.black,
                             )),
                       ),
                       TextButton(
                         onPressed: _equal,
-                        child: Text("=",
-                            style: new TextStyle(
+                        child: const Text("=",
+                            style: TextStyle(
                               fontSize: 40.0,
                               color: Colors.black,
                             )),
                       ),
                       TextButton(
                         onPressed: _div,
-                        child: Text("/",
-                            style: new TextStyle(
+                        child: const Text("/",
+                            style: TextStyle(
                               fontSize: 40.0,
                               color: Colors.black,
                             )),
                       ),
                       IconButton(
-                        onPressed: () => _fetchRemoteConfig(),
-                        icon: const Icon(Icons.refresh),
+                        onPressed: () => {
+                          setState(() => {
+                                if (input.isNotEmpty)
+                                  {input = input.substring(0, input.length - 1)}
+                              })
+                        },
+                        icon: const Icon(Icons.backspace),
                       ),
                     ])),
               ]));
         }
 
-        Timer.periodic(Duration(seconds: 5), (_) async {
-          if (_remoteConfig != null) {
-            _getWeather();
-          }
-        });
-
         // Otherwise, show something whilst waiting for initialization to complete
-        return CircularProgressIndicator();
+        return const CircularProgressIndicator();
       },
     );
   }
